@@ -1,0 +1,42 @@
+/**
+ * ChatHistory.tsx
+ * -------------
+ * Displays the conversation history.
+ */
+
+import React from 'react';
+import { ScrollArea } from '../../ui/scroll-area';
+import { MessageCircle } from 'lucide-react';
+import ChatBubble from '../chat-bubble/ChatBubble';
+import { ChatMessage } from '../../../hooks/ui/use-chat-history';
+
+interface ChatHistoryProps {
+  messages: ChatMessage[];
+  className?: string;
+}
+
+const ChatHistory: React.FC<ChatHistoryProps> = ({
+  messages = [],
+  className = '',
+}) => {
+  return (
+    <div className={`w-full h-full bg-background rounded-lg ${className}`}>
+      <ScrollArea className="h-full p-4">
+        <div className="flex flex-col space-y-4">
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+              <MessageCircle className="w-12 h-12 mb-2 opacity-50" />
+              <p>No messages yet. Start a conversation!</p>
+            </div>
+          ) : (
+            messages.map((message) => (
+              <ChatBubble key={message.id} message={message} />
+            ))
+          )}
+        </div>
+      </ScrollArea>
+    </div>
+  );
+};
+
+export default ChatHistory;

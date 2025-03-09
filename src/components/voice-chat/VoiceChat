@@ -1,0 +1,308 @@
+/**
+ * VoiceChat.tsx
+ * -----------
+ * Main voice chat component that orchestrates subcomponents.
+ */
+
+import React, { useCallback } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
+import { Alert, AlertDescription, AlertTitle } from '../ui/alert';
+import { AlertCircle } from 'lucide-react';
+
+// Import subcomponents
+import ChatHistory from './chat-history/ChatHistory';
+import ControlPanel from './control-panel/ControlPanel';
+import StatusDisplay from './status-display/StatusDisplay';
+import SettingsPanel from './settings-panel/SettingsPanel';
+
+// Import hooks
+import { useVoiceState } from '../../hooks/ui/use-voice-state';
+import { useChatHistory } from '../../hooks/ui/use-chat-history';
+import { useAudioRecorder } from '../../hooks/audio/use-audio-recorder';
+import { useSilenceDetector } from '../../hooks/audio/use-silence-detector';
+import { useOpenAI } from '../../hooks/api/use-openai';
+import { useSpeechSynthesis } from '../../hooks/audio/use-speech-synthesis';
+import { playBeep } from '../../utils/audio.utils';
+
+// Component props
+interface VoiceChatProps {
+  className?: string;
+  apiKey: string;
+}
+
+const VoiceChat: React.FC<VoiceChatProps> = ({
+  className = '',
+  apiKey,
+}) => {
+  // Initialize hooks
+  const voiceState = useVoiceState();
+  const chatHistory = useChatHistory([{
+    id: 'welcome',
+    content: "Hello! I'm your AI voice assistant. How can I help you today?",
+    sender: 'ai',
+    timestamp: new Date(),
+    status: 'sent',
+  }]);
+  
+  const audioRecorder = useAudioRecorder();
+  const [silenceDuration, setSilenceDuration] = React.useState<number>(5000);
+  
+  const silenceDetector = useSilenceDetector(
+    { silenceDuration },
+    () => {
+      console.log(`Silence detected for ${silenceDuration / 1000} seconds`);
+      if (audioRecorder.isRecording) {
+        setTimeout(() => handleStopRecording(), 500);
+      }
+    }
+  );
+  
+  const openAI = useOpenAI(apiKey);
+  const speechSynthesis = useSpeechSynthesis();
+  
+  /**
+   * Handle changes to silence duration setting
+   */
+  const handleSilenceDurationChange = useCallback((newDuration: number) => {
+    setSilenceDuration(newDuration);
+  }, []);
+  
+  /**
+   * Start recording audio
+   */
+  const handleStartRecording = useCallback(async () => {
+    if (!voiceState.canRecord || audioRecorder.isRecording) return;
+    
+    try {
+      voiceState.setState('recording');
+      await audioRecorder.startRecording(1000);
+      silenceDetector.stopDetection();
+      await silenceDetector.startDetection();
+    } catch (error) {
+      voiceState.setError(error instanceof Error ? error.message : String(error));
+    }
+  }, [voiceState, audioRecorder, silenceDetector]);
+  
+  /**
+   * Stop recording audio
+   */
+  const handleStopRecording = useCallback(() => {
+    silenceDetector.stopDetection();
+    
+    if (audioRecorder.isRecording) {
+      audioRecorder.stopRecording();
+      playBeep();
+    }
+    
+    if (audioRecorder.audioBlob) {
+      processAudioInput(audioRecorder.audioBlob);
+    }
+  }, [audioRecorder, silenceDetector]);
+  
+  /**
+   * Process the recorded audio
+   */
+  const processAudioInput = useCallback(async (audioBlob: Blob) => {
+    try {
+      voiceState.setState('processing');
+      
+      // Add user message placeholder
+      const userMessageId = chatHistory.addMessage({
+        content: 'Processing your audio...',
+        sender: 'user',
+        status: 'sending',
+      });
+      
+      // Format chat history for API
+      const messageHistory = chatHistory.messages
+        .filter(msg => msg.status !== 'sending' && msg.status !== 'error')
+        .map(msg => ({
+          content: msg.content,
+          sender: msg.sender,
+        }));
+      
+      // Process with OpenAI
+      const { transcription, textResponse, audioData } = 
+        await openAI.sendAudioMessage(audioBlob, messageHistory);
+      
+      // Update messages
+      chatHistory.updateMessage(userMessageId, {
+        content: transcription,
+        status: 'sent',
+      });
+      
+      chatHistory.addMessage({
+        content: textResponse,
+        sender: 'ai',
+        status: 'sent',
+      });
+      
+      // Play response
+      await playResponse(audioData, textResponse);
+    } catch (error) {
+      voiceState.setError(error instanceof Error ? error.message : String(error));
+    }
+  }, [voiceState, chatHistory, openAI]);
+  
+  /**
+   * Handle text message submission
+   */
+  const handleSendMessage = useCallback(async (message: string) => {
+    if (!message.trim()) return;
+    
+    try {
+      voiceState.setState('processing');
+      
+      // Add user message
+      const userMessageId = chatHistory.addMessage({
+        content: message,
+        sender: 'user',
+        status: 'sending',
+      });
+      
+      // Format chat history for API
+      const messageHistory = chatHistory.messages
+        .filter(msg => msg.status !== 'sending' && msg.status !== 'error')
+        .map(msg => ({
+          content: msg.content,
+          sender: msg.sender,
+        }));
+      
+      // Process with OpenAI
+      const { text, audioData } = await openAI.sendMessage(message, messageHistory);
+      
+      // Update messages
+      chatHistory.updateMessage(userMessageId, { status: 'sent' });
+      
+      chatHistory.addMessage({
+        content: text,
+        sender: 'ai',
+        status: 'sent',
+      });
+      
+      // Play response
+      await playResponse(audioData, text);
+    } catch (error) {
+      voiceState.setError(error instanceof Error ? error.message : String(error));
+    }
+  }, [voiceState, chatHistory, openAI]);
+  
+  /**
+   * Play response audio with fallback
+   */
+  const playResponse = useCallback(async (audioData: string | null, textResponse: string) => {
+    voiceState.setState('speaking');
+    
+    try {
+      if (audioData) {
+        // Process and play audio data
+        const byteCharacters = atob(audioData);
+        const byteArray = new Uint8Array(
+          [...byteCharacters].map(char => char.charCodeAt(0))
+        );
+        const audioBlob = new Blob([byteArray], { type: 'audio/wav' });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        
+        // Play the audio
+        await new Promise<void>((resolve, reject) => {
+          audio.onended = () => {
+            URL.revokeObjectURL(audioUrl);
+            resolve();
+          };
+          
+          audio.onerror = () => {
+            URL.revokeObjectURL(audioUrl);
+            reject(new Error('Audio playback failed'));
+          };
+          
+          audio.play().catch(reject);
+        });
+      } else {
+        // Use speech synthesis
+        speechSynthesis.speak(textResponse);
+        
+        // Wait for speech to complete
+        while (speechSynthesis.isSpeaking) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+    } catch (error) {
+      console.error('Error playing response:', error);
+      // Fall back to speech synthesis if audio fails
+      speechSynthesis.speak(textResponse);
+      
+      // Wait for speech to complete
+      while (speechSynthesis.isSpeaking) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    } finally {
+      voiceState.setState('idle');
+    }
+  }, [voiceState, speechSynthesis]);
+
+  // Validate API key
+  if (!apiKey) {
+    return (
+      <Card className={`w-full max-w-4xl mx-auto bg-background ${className}`}>
+        <CardHeader className="border-b">
+          <CardTitle className="text-xl font-bold">Voice Assistant</CardTitle>
+        </CardHeader>
+        <CardContent className="p-4">
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Missing API Key</AlertTitle>
+            <AlertDescription>
+              OpenAI API key is required. Please set it in your environment variables.
+            </AlertDescription>
+          </Alert>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className={`w-full max-w-4xl mx-auto bg-background ${className}`}>
+      <CardHeader className="border-b">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-xl font-bold">Voice Assistant</CardTitle>
+          <div className="flex items-center gap-2">
+            <SettingsPanel
+              silenceDuration={silenceDuration}
+              onSilenceDurationChange={handleSilenceDurationChange}
+            />
+            <StatusDisplay status={voiceState.state} />
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="flex flex-col h-[600px]">
+          {voiceState.error && (
+            <Alert variant="destructive" className="m-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Error</AlertTitle>
+              <AlertDescription>{voiceState.error}</AlertDescription>
+            </Alert>
+          )}
+
+          <ChatHistory 
+            messages={chatHistory.messages}
+            className="flex-1 overflow-hidden h-full border-none" 
+          />
+
+          <ControlPanel
+            voiceState={voiceState.state}
+            silenceDetected={silenceDetector.silenceDetected}
+            silenceDuration={silenceDuration}
+            onStartRecording={handleStartRecording}
+            onStopRecording={handleStopRecording}
+            onSendMessage={handleSendMessage}
+            disabled={!audioRecorder.isInitialized}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+export default VoiceChat;
