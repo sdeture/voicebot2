@@ -1,22 +1,42 @@
-/**
- * OpenAI API integration for voice chat functionality
- * Handles sending user queries to the API and processing responses
- */
+/********************************************************************
+ * OpenAI API Integration for Voice Chat with GPT-4o
+ * -------------------------------------------------
+ * This module handles communication with the OpenAI API,
+ * specifically focused on the GPT-4o model with audio response
+ * capabilities.
+ ********************************************************************/
 
-// Define types for OpenAI API requests and responses
+/********************************************************************
+ * Type Definitions
+ ********************************************************************/
+
+// Represents a single chat message in the conversation
 type ChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
+  // Audio object for responses that include audio
+  audio?: {
+    id?: string;
+    expires_at?: number;
+    data?: string; // Base64-encoded audio data
+    transcript?: string;
+  };
 };
 
+// Structure for a chat completion request to the API
 type ChatCompletionRequest = {
   model: string;
   messages: ChatMessage[];
   temperature?: number;
   max_tokens?: number;
-  stream?: boolean;
+  modalities?: string[]; // Output modalities (e.g., ["text", "audio"])
+  audio?: {
+    voice?: string; // Which voice to use (e.g., "alloy")
+    format?: string; // Output audio format (e.g., "wav")
+  };
 };
 
+// Structure for the chat completion response returned by the API
 type ChatCompletionResponse = {
   id: string;
   object: string;
@@ -24,7 +44,7 @@ type ChatCompletionResponse = {
   model: string;
   choices: {
     index: number;
-    message: ChatMessage;
+    message: ChatMessage; // May include audio
     finish_reason: string;
   }[];
   usage: {
@@ -34,106 +54,31 @@ type ChatCompletionResponse = {
   };
 };
 
+// Structure for audio transcription responses
 type AudioTranscriptionResponse = {
   text: string;
 };
 
-/**
- * Configuration for OpenAI API
- */
+/********************************************************************
+ * API Configuration
+ ********************************************************************/
 const OPENAI_CONFIG = {
   apiUrl: "https://api.openai.com/v1",
   chatCompletionEndpoint: "/chat/completions",
   audioTranscriptionEndpoint: "/audio/transcriptions",
-  audioCompletionEndpoint: "/audio/speech",
-  audioModel: "whisper-1", // Using Whisper for audio transcription
-  chatModel: "gpt-3.5-turbo", // Using GPT-3.5 for chat responses
+  audioModel: "whisper-1", // For transcription
+  gptModel: "gpt-4o-audio-preview", // Updated to use GPT-4o
   systemPrompt:
     "You are a helpful voice assistant. Provide concise and informative responses.",
   temperature: 0.7,
   max_tokens: 150,
 };
 
-/**
- * Sends a message to OpenAI API and returns the response
- * @param message - The user's message to send to the API
- * @param conversationHistory - Previous messages in the conversation
- * @param apiKey - OpenAI API key
- */
-export const sendMessageToOpenAI = async (
-  message: string,
-  conversationHistory: ChatMessage[] = [],
-  apiKey: string,
-): Promise<string> => {
-  if (!apiKey) {
-    throw new Error("OpenAI API key is required");
-  }
-
-  // Prepare the messages array with system prompt and conversation history
-  const messages: ChatMessage[] = [
-    { role: "system", content: OPENAI_CONFIG.systemPrompt },
-    ...conversationHistory,
-    { role: "user", content: message },
-  ];
-
-  // Prepare the request payload
-  const requestBody: ChatCompletionRequest = {
-    model: OPENAI_CONFIG.chatModel,
-    messages,
-    temperature: OPENAI_CONFIG.temperature,
-    max_tokens: OPENAI_CONFIG.max_tokens,
-  };
-
-  try {
-    // Send request to OpenAI API
-    const response = await fetch(
-      `${OPENAI_CONFIG.apiUrl}${OPENAI_CONFIG.chatCompletionEndpoint}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(requestBody),
-      },
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      let errorMessage = response.statusText;
-
-      try {
-        const errorData = JSON.parse(errorText);
-        errorMessage =
-          errorData.error?.message || errorData.message || response.statusText;
-      } catch (e) {
-        // If we can't parse the error as JSON, use the raw text
-        errorMessage = errorText || response.statusText;
-      }
-
-      throw new Error(`OpenAI API error: ${errorMessage}`);
-    }
-
-    const data: ChatCompletionResponse = await response.json().catch(() => {
-      throw new Error("Failed to parse API response");
-    });
-
-    if (!data.choices || data.choices.length === 0) {
-      throw new Error("No response from OpenAI API");
-    }
-
-    return data.choices[0].message.content.trim();
-  } catch (error) {
-    console.error("Error calling OpenAI API:", error);
-    throw error;
-  }
-};
-
-/**
- * Transcribes audio using OpenAI's audio API
- * @param audioBlob - The audio blob to transcribe
- * @param apiKey - OpenAI API key
- */
+/********************************************************************
+ * Function: transcribeAudio
+ * -------------------------
+ * Uses OpenAI's Whisper model to transcribe audio recordings.
+ ********************************************************************/
 export const transcribeAudio = async (
   audioBlob: Blob,
   apiKey: string,
@@ -143,20 +88,16 @@ export const transcribeAudio = async (
   }
 
   try {
-    // Convert audio to MP3 format if needed (browser compatibility)
     let processedBlob = audioBlob;
     if (audioBlob.type !== "audio/mp3" && audioBlob.type !== "audio/mpeg") {
-      // Use webm as is, OpenAI supports it
       processedBlob = new Blob([audioBlob], { type: "audio/webm" });
     }
 
-    // Create a FormData object to send the audio file
     const formData = new FormData();
     formData.append("file", processedBlob, "recording.webm");
     formData.append("model", OPENAI_CONFIG.audioModel);
-    formData.append("language", "en"); // Specify language (optional)
+    formData.append("language", "en");
 
-    // Send request to OpenAI API
     const response = await fetch(
       `${OPENAI_CONFIG.apiUrl}${OPENAI_CONFIG.audioTranscriptionEndpoint}`,
       {
@@ -177,7 +118,6 @@ export const transcribeAudio = async (
         errorMessage =
           errorData.error?.message || errorData.message || response.statusText;
       } catch (e) {
-        // If we can't parse the error as JSON, use the raw text
         errorMessage = errorText || response.statusText;
       }
 
@@ -195,17 +135,24 @@ export const transcribeAudio = async (
   }
 };
 
-/**
- * Process audio with OpenAI: first transcribe, then get a response
- * @param audioBlob - The audio blob to process
- * @param conversationHistory - Previous messages in the conversation
- * @param apiKey - OpenAI API key
- */
-export const sendAudioToOpenAI = async (
+/********************************************************************
+ * Function: sendAudioToGPT4o
+ * --------------------------
+ * Main function for the audio-enabled voice chat workflow:
+ * 1. Transcribes the user's audio to text.
+ * 2. Sends the transcribed text to GPT-4o.
+ * 3. Returns both text and audio responses from GPT-4o.
+ ********************************************************************/
+export const sendAudioToGPT4o = async (
   audioBlob: Blob,
   conversationHistory: ChatMessage[] = [],
   apiKey: string,
-): Promise<{ transcription: string; response: string }> => {
+  audioOptions?: { voice?: string; format?: string },
+): Promise<{
+  transcription: string;
+  textResponse: string;
+  audioData: string | null;
+}> => {
   if (!apiKey) {
     throw new Error("OpenAI API key is required");
   }
@@ -222,62 +169,80 @@ export const sendAudioToOpenAI = async (
       );
     }
 
-    // Step 2: Send the transcription to get a response
-    console.log("Getting response for transcription...");
-    const response = await sendMessageToOpenAI(
+    // Step 2: Get text and audio response from GPT-4o
+    console.log("Getting response from GPT-4o...");
+    const response = await sendMessageToGPT4o(
       transcription,
       conversationHistory,
       apiKey,
+      audioOptions,
     );
-    console.log("Response received:", response);
+    console.log("Response received:", {
+      textLength: response.text ? response.text.length : 0,
+      hasAudio: !!response.audioData,
+    });
 
     return {
       transcription,
-      response,
+      textResponse: response.text,
+      audioData: response.audioData,
     };
   } catch (error) {
-    console.error("Error processing audio:", error);
+    console.error("Error processing audio with GPT-4o:", error);
     throw error;
   }
 };
 
-/**
- * Creates a streaming connection to OpenAI API
- * @param message - The user's message to send to the API
- * @param conversationHistory - Previous messages in the conversation
- * @param apiKey - OpenAI API key
- * @param onChunk - Callback function to handle each chunk of the response
- * @param onComplete - Callback function called when the stream is complete
- */
-export const streamMessageFromOpenAI = async (
+/********************************************************************
+ * Function: sendMessageToGPT4o
+ * ----------------------------
+ * Sends a text message to GPT-4o and requests both text and audio
+ * responses.
+ ********************************************************************/
+export const sendMessageToGPT4o = async (
   message: string,
   conversationHistory: ChatMessage[] = [],
   apiKey: string,
-  onChunk: (chunk: string) => void,
-  onComplete: (fullResponse: string) => void,
-): Promise<void> => {
+  audioOptions?: { voice?: string; format?: string },
+): Promise<{ text: string; audioData: string | null }> => {
   if (!apiKey) {
     throw new Error("OpenAI API key is required");
   }
 
-  // Prepare the messages array with system prompt and conversation history
+  // Prepare conversation messages with system prompt
   const messages: ChatMessage[] = [
     { role: "system", content: OPENAI_CONFIG.systemPrompt },
     ...conversationHistory,
     { role: "user", content: message },
   ];
 
-  // Prepare the request payload with streaming enabled
+  // Prepare request payload with modalities and audio options
   const requestBody: ChatCompletionRequest = {
-    model: OPENAI_CONFIG.chatModel,
+    model: OPENAI_CONFIG.gptModel,
     messages,
     temperature: OPENAI_CONFIG.temperature,
     max_tokens: OPENAI_CONFIG.max_tokens,
-    stream: true,
+    modalities: ["text", "audio"], // Request both text and audio output
+    audio: {
+      voice: audioOptions?.voice || "alloy", // Default voice
+      format: audioOptions?.format || "wav", // Default output format
+    },
   };
 
+  console.log("Sending request to OpenAI:", {
+    model: requestBody.model,
+    messageCount: messages.length,
+    lastUserMessage:
+      messages
+        .filter((m) => m.role === "user")
+        .pop()
+        ?.content.substring(0, 50) + "...",
+    modalities: requestBody.modalities,
+    audioOptions: requestBody.audio,
+  });
+
   try {
-    // Send request to OpenAI API
+    // Send the request to the chat completions endpoint
     const response = await fetch(
       `${OPENAI_CONFIG.apiUrl}${OPENAI_CONFIG.chatCompletionEndpoint}`,
       {
@@ -293,66 +258,77 @@ export const streamMessageFromOpenAI = async (
     if (!response.ok) {
       const errorText = await response.text();
       let errorMessage = response.statusText;
-
       try {
         const errorData = JSON.parse(errorText);
         errorMessage =
           errorData.error?.message || errorData.message || response.statusText;
       } catch (e) {
-        // If we can't parse the error as JSON, use the raw text
         errorMessage = errorText || response.statusText;
       }
-
       throw new Error(`OpenAI API error: ${errorMessage}`);
     }
 
-    // Handle the stream response
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error("Failed to get response reader");
+    // Parse the response JSON
+    const data: ChatCompletionResponse = await response.json().catch(() => {
+      throw new Error("Failed to parse API response");
+    });
+
+    if (!data.choices || data.choices.length === 0) {
+      throw new Error("No response from OpenAI API");
     }
 
-    const decoder = new TextDecoder("utf-8");
-    let fullResponse = "";
+    // Log the full response structure to debug
+    console.log(
+      "Full GPT-4o response structure:",
+      JSON.stringify(data, null, 2),
+    );
+    console.log("First choice message:", data.choices[0].message);
 
-    // Process the stream chunks
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    // Extract text and audio data from the response
+    const messageChoice = data.choices[0].message;
 
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split("\n").filter((line) => line.trim() !== "");
-
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6);
-          if (data === "[DONE]") continue;
-
-          try {
-            const parsed = JSON.parse(data);
-            const content = parsed.choices[0]?.delta?.content || "";
-            if (content) {
-              onChunk(content);
-              fullResponse += content;
-            }
-          } catch (e) {
-            console.error("Error parsing stream data:", e);
-          }
-        }
-      }
+    // Determine the transcript to display:
+    // Prefer the transcript provided in the audio object if available.
+    let textResponse = "";
+    if (
+      messageChoice.audio &&
+      typeof messageChoice.audio.transcript === "string" &&
+      messageChoice.audio.transcript.trim() !== ""
+    ) {
+      textResponse = messageChoice.audio.transcript.trim();
+    } else if (
+      typeof messageChoice.content === "string" &&
+      messageChoice.content.trim() !== ""
+    ) {
+      textResponse = messageChoice.content.trim();
     }
 
-    onComplete(fullResponse);
+    const audioData = messageChoice.audio?.data || null;
+
+    if (!textResponse && !audioData) {
+      throw new Error("No response received from API");
+    }
+
+    console.log("GPT-4o response extracted:", {
+      textResponse: textResponse
+        ? textResponse.substring(0, 50) + "..."
+        : "<no text>",
+      hasAudio: !!audioData,
+    });
+
+    return { text: textResponse, audioData };
   } catch (error) {
-    console.error("Error streaming from OpenAI API:", error);
+    console.error("Error calling GPT-4o API:", error);
     throw error;
   }
 };
 
-/**
- * Utility function to format conversation history for OpenAI API
- * @param messages - Array of user and AI messages
- */
+/********************************************************************
+ * Function: formatConversationHistory
+ * -----------------------------------
+ * Utility function to convert the conversation history into
+ * the format expected by the OpenAI API.
+ ********************************************************************/
 export const formatConversationHistory = (
   messages: Array<{ content: string; sender: "user" | "ai" }>,
 ): ChatMessage[] => {
@@ -362,10 +338,12 @@ export const formatConversationHistory = (
   }));
 };
 
+/********************************************************************
+ * Default Export
+ ********************************************************************/
 export default {
-  sendMessageToOpenAI,
-  streamMessageFromOpenAI,
-  formatConversationHistory,
   transcribeAudio,
-  sendAudioToOpenAI,
+  sendMessageToGPT4o,
+  sendAudioToGPT4o,
+  formatConversationHistory,
 };

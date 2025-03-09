@@ -57,6 +57,27 @@ const VoiceChatInterface: React.FC<VoiceChatInterfaceProps> = ({
   > | null>(null);
   const MAX_RECORDING_DURATION = 60000; // 60 seconds max recording
 
+  // Helper function for text-to-speech fallback
+  const fallbackToTextToSpeech = (text: string) => {
+    if (textToSpeech.isSpeechSynthesisSupported()) {
+      textToSpeech.speak(text).then((speech) => {
+        speech.start();
+        speech.onEnd(() => {
+          setVoiceState("idle");
+          // Reset audio chunks for next recording
+          audioChunksRef.current = [];
+        });
+      });
+    } else {
+      // If speech synthesis is not supported, just simulate speaking
+      setTimeout(() => {
+        setVoiceState("idle");
+        // Reset audio chunks for next recording
+        audioChunksRef.current = [];
+      }, 3000);
+    }
+  };
+
   // Function to handle API errors
   const handleApiError = (error: any, messageId?: string) => {
     console.error("API Error:", error);
@@ -129,15 +150,15 @@ const VoiceChatInterface: React.FC<VoiceChatInterfaceProps> = ({
       );
 
       try {
-        // Get response from OpenAI using the audio model
+        // Get response from OpenAI using the GPT-4o audio model
         console.log("Sending audio to OpenAI...");
-        const result = await openai.sendAudioToOpenAI(
+        const result = await openai.sendAudioToGPT4o(
           audioBlob,
           formattedHistory,
           apiKey,
         );
 
-        const { transcription, response } = result;
+        const { transcription, textResponse, audioData } = result;
         setTranscription(transcription);
 
         // Update the user message with the transcription
@@ -156,28 +177,61 @@ const VoiceChatInterface: React.FC<VoiceChatInterfaceProps> = ({
         // Add AI response
         const aiResponse: Message = {
           id: (Date.now() + 1).toString(),
-          content: response,
+          content: textResponse,
           sender: "ai",
           timestamp: new Date(),
           status: "sent",
         };
 
+        console.log("Adding AI response to chat:", {
+          responseId: aiResponse.id,
+          content:
+            aiResponse.content.substring(0, 50) +
+            (aiResponse.content.length > 50 ? "..." : ""),
+          hasAudioData: !!audioData,
+        });
+
         setMessages((prev) => [...prev, aiResponse]);
         setVoiceState("speaking");
 
-        // Use text-to-speech to speak the response if supported
-        if (textToSpeech.isSpeechSynthesisSupported()) {
-          textToSpeech.speak(aiResponse.content).then((speech) => {
-            speech.start();
-            speech.onEnd(() => {
+        // If we have audio data from GPT-4o, use it directly
+        if (audioData) {
+          try {
+            // Convert base64 audio data to a blob
+            const byteCharacters = atob(audioData);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const audioBlob = new Blob([byteArray], { type: "audio/wav" });
+
+            // Create audio URL and play it
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+
+            // Make sure the AI response is visible in the chat before playing audio
+            setTimeout(() => {
+              audio.play().catch((err) => {
+                console.error("Error playing audio:", err);
+                fallbackToTextToSpeech(aiResponse.content);
+              });
+            }, 100);
+
+            audio.onended = () => {
               setVoiceState("idle");
-            });
-          });
+              URL.revokeObjectURL(audioUrl);
+              // Reset audio chunks for next recording
+              audioChunksRef.current = [];
+            };
+          } catch (error) {
+            console.error("Error playing audio response:", error);
+            // Fall back to text-to-speech if audio playback fails
+            fallbackToTextToSpeech(aiResponse.content);
+          }
         } else {
-          // If speech synthesis is not supported, just simulate speaking
-          setTimeout(() => {
-            setVoiceState("idle");
-          }, 3000);
+          // Fall back to text-to-speech if no audio data
+          fallbackToTextToSpeech(aiResponse.content);
         }
 
         // Call the provided onSendMessage function with the transcription
@@ -241,11 +295,12 @@ const VoiceChatInterface: React.FC<VoiceChatInterfaceProps> = ({
       );
 
       try {
-        // Get response from OpenAI
-        const response = await openai.sendMessageToOpenAI(
+        // Use the GPT-4o audio endpoint
+        const { text, audioData } = await openai.sendMessageToGPT4o(
           message,
           formattedHistory,
           apiKey,
+          { voice: "alloy", format: "wav" }, // Optional audio parameters
         );
 
         // Update user message status to sent
@@ -255,31 +310,64 @@ const VoiceChatInterface: React.FC<VoiceChatInterfaceProps> = ({
           ),
         );
 
-        // Add AI response
+        // Add AI response with the text returned from the new API call
         const aiResponse: Message = {
           id: (Date.now() + 1).toString(),
-          content: response,
+          content: text,
           sender: "ai",
           timestamp: new Date(),
           status: "sent",
         };
 
+        console.log("Adding AI text response to chat:", {
+          responseId: aiResponse.id,
+          content:
+            aiResponse.content.substring(0, 50) +
+            (aiResponse.content.length > 50 ? "..." : ""),
+          hasAudioData: !!audioData,
+        });
+
         setMessages((prev) => [...prev, aiResponse]);
         setVoiceState("speaking");
 
-        // Use text-to-speech to speak the response if supported
-        if (textToSpeech.isSpeechSynthesisSupported()) {
-          textToSpeech.speak(aiResponse.content).then((speech) => {
-            speech.start();
-            speech.onEnd(() => {
+        // If we have audio data from GPT-4o, use it directly
+        if (audioData) {
+          try {
+            // Convert base64 audio data to a blob
+            const byteCharacters = atob(audioData);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const audioBlob = new Blob([byteArray], { type: "audio/wav" });
+
+            // Create audio URL and play it
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+
+            // Make sure the AI response is visible in the chat before playing audio
+            setTimeout(() => {
+              audio.play().catch((err) => {
+                console.error("Error playing audio:", err);
+                fallbackToTextToSpeech(aiResponse.content);
+              });
+            }, 100);
+
+            audio.onended = () => {
               setVoiceState("idle");
-            });
-          });
+              URL.revokeObjectURL(audioUrl);
+              // Reset audio chunks for next recording
+              audioChunksRef.current = [];
+            };
+          } catch (error) {
+            console.error("Error playing audio response:", error);
+            // Fall back to text-to-speech if audio playback fails
+            fallbackToTextToSpeech(aiResponse.content);
+          }
         } else {
-          // If speech synthesis is not supported, just simulate speaking
-          setTimeout(() => {
-            setVoiceState("idle");
-          }, 3000);
+          // Fall back to text-to-speech if no audio data
+          fallbackToTextToSpeech(aiResponse.content);
         }
 
         // Call the provided onSendMessage function
@@ -456,8 +544,12 @@ const VoiceChatInterface: React.FC<VoiceChatInterfaceProps> = ({
       voiceState === "speaking" ||
       voiceState === "error"
     ) {
+      console.log("Cannot start recording in current state:", voiceState);
       return;
     }
+
+    // Reset audio chunks for new recording
+    audioChunksRef.current = [];
 
     try {
       // Initialize recorder if not already initialized
@@ -567,6 +659,16 @@ const VoiceChatInterface: React.FC<VoiceChatInterfaceProps> = ({
       });
     }
   }, [silenceDuration, isRecording]);
+
+  // Reset recorder when returning to idle state
+  useEffect(() => {
+    if (voiceState === "idle" && recorder) {
+      // Reset recorder state to prepare for next recording
+      if (recorder.getState() !== "inactive") {
+        recorder.stop();
+      }
+    }
+  }, [voiceState, recorder]);
 
   // Clean up resources on unmount
   useEffect(() => {
