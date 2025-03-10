@@ -1,5 +1,5 @@
 import React from "react";
-import { cn } from "@/lib/utils";
+import { cn } from "@/utils/cn";
 import { Mic, MicOff, Loader2, Volume2, AlertTriangle } from "lucide-react";
 
 export type StatusType =
