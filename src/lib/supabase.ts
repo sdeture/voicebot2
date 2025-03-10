@@ -1,6 +1,11 @@
-import { createClient } from "@supabase/supabase-js";
+/**
+ * Re-export Supabase client for backward compatibility
+ */
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+/**
+import * as supabaseService from "../services/database/supabase.service";
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = supabaseService.supabaseClient;
+
+export default supabase;
+*/

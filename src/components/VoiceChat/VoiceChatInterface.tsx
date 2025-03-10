@@ -6,11 +6,11 @@ import SilenceSettings from "./SilenceSettings";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { AlertCircle } from "lucide-react";
-import textToSpeech from "../../lib/textToSpeech";
-import audioRecorder from "../../lib/audioRecorder";
-import silenceDetector from "../../lib/silenceDetector";
-import openai from "../../lib/openai";
-import { playBeep } from "../../lib/audioUtils";
+import * as textToSpeech from "../../services/audio/speech-synthesis.service";
+import * as audioRecorder from "../../services/audio/recorder.service";
+import * as silenceDetector from "../../services/audio/silence-detector.service";
+import * as openai from "../../services/api/openai.service";
+import { playBeep } from "../../utils/audio.utils";
 
 // Define the VoiceState type locally
 type VoiceState = "idle" | "recording" | "processing" | "speaking" | "error";
